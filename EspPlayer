@@ -1,0 +1,349 @@
+-- ESP Player Script untuk Android Executor
+-- Script ini menampilkan informasi player seperti nama, jarak, health, dan highlight
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Konfigurasi ESP
+local ESP_CONFIG = {
+    enabled = true,
+    showNames = true,
+    showDistance = true,
+    showHealth = true,
+    showBox = true,
+    showHighlight = true, -- Fitur highlight baru
+    maxDistance = 1000, -- maksimal jarak dalam studs
+    
+    -- Warna
+    allyColor = Color3.fromRGB(0, 255, 0), -- hijau untuk teman
+    enemyColor = Color3.fromRGB(255, 0, 0), -- merah untuk musuh
+    textColor = Color3.fromRGB(255, 255, 255), -- putih untuk teks
+    
+    -- Warna highlight (lebih lembut)
+    allyHighlight = Color3.fromRGB(0, 150, 0), -- hijau lembut untuk teman
+    enemyHighlight = Color3.fromRGB(150, 0, 0), -- merah lembut untuk musuh
+    highlightTransparency = 0.7, -- transparansi highlight (0 = solid, 1 = invisible)
+    
+    -- Ukuran
+    textSize = 14,
+    boxThickness = 2
+}
+
+-- Tabel untuk menyimpan ESP objects
+local espObjects = {}
+
+-- Fungsi untuk membuat highlight
+local function createHighlight(character, isEnemy)
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ESP_Highlight"
+    highlight.Adornee = character
+    highlight.FillTransparency = ESP_CONFIG.highlightTransparency
+    highlight.OutlineTransparency = 0.5
+    
+    -- Tentukan warna highlight
+    local highlightColor = isEnemy and ESP_CONFIG.enemyHighlight or ESP_CONFIG.allyHighlight
+    highlight.FillColor = highlightColor
+    highlight.OutlineColor = highlightColor
+    
+    highlight.Parent = character
+    return highlight
+end
+
+-- Fungsi untuk membuat ESP GUI
+local function createESP(player)
+    if player == LocalPlayer then return end
+    
+    local espGui = Instance.new("BillboardGui")
+    espGui.Name = "ESP_" .. player.Name
+    espGui.AlwaysOnTop = true
+    espGui.Size = UDim2.new(0, 200, 0, 120)
+    espGui.StudsOffset = Vector3.new(0, 3, 0)
+    
+    -- Frame utama
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Parent = espGui
+    mainFrame.Size = UDim2.new(1, 0, 1, 0)
+    mainFrame.BackgroundTransparency = 1
+    
+    -- Label nama
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Parent = mainFrame
+    nameLabel.Size = UDim2.new(1, 0, 0.25, 0)
+    nameLabel.Position = UDim2.new(0, 0, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = player.Name
+    nameLabel.TextColor3 = ESP_CONFIG.textColor
+    nameLabel.TextSize = ESP_CONFIG.textSize
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    nameLabel.Font = Enum.Font.SourceSansBold
+    
+    -- Label jarak
+    local distanceLabel = Instance.new("TextLabel")
+    distanceLabel.Parent = mainFrame
+    distanceLabel.Size = UDim2.new(1, 0, 0.25, 0)
+    distanceLabel.Position = UDim2.new(0, 0, 0.25, 0)
+    distanceLabel.BackgroundTransparency = 1
+    distanceLabel.Text = "0m"
+    distanceLabel.TextColor3 = ESP_CONFIG.textColor
+    distanceLabel.TextSize = ESP_CONFIG.textSize - 2
+    distanceLabel.TextStrokeTransparency = 0
+    distanceLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    distanceLabel.Font = Enum.Font.SourceSans
+    
+    -- Label health (persentase)
+    local healthLabel = Instance.new("TextLabel")
+    healthLabel.Parent = mainFrame
+    healthLabel.Size = UDim2.new(1, 0, 0.25, 0)
+    healthLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    healthLabel.BackgroundTransparency = 1
+    healthLabel.Text = "100%"
+    healthLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    healthLabel.TextSize = ESP_CONFIG.textSize - 2
+    healthLabel.TextStrokeTransparency = 0
+    healthLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    healthLabel.Font = Enum.Font.SourceSans
+    
+    -- Label health (angka aktual) - FITUR BARU
+    local healthNumberLabel = Instance.new("TextLabel")
+    healthNumberLabel.Parent = mainFrame
+    healthNumberLabel.Size = UDim2.new(1, 0, 0.25, 0)
+    healthNumberLabel.Position = UDim2.new(0, 0, 0.75, 0)
+    healthNumberLabel.BackgroundTransparency = 1
+    healthNumberLabel.Text = "100/100"
+    healthNumberLabel.TextColor3 = ESP_CONFIG.textColor
+    healthNumberLabel.TextSize = ESP_CONFIG.textSize - 4
+    healthNumberLabel.TextStrokeTransparency = 0
+    healthNumberLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    healthNumberLabel.Font = Enum.Font.SourceSans
+    
+    espObjects[player] = {
+        gui = espGui,
+        nameLabel = nameLabel,
+        distanceLabel = distanceLabel,
+        healthLabel = healthLabel,
+        healthNumberLabel = healthNumberLabel,
+        player = player,
+        highlight = nil -- akan diisi saat character ada
+    }
+    
+    return espGui
+end
+
+-- Fungsi untuk update ESP
+local function updateESP(espData)
+    if not espData or not espData.player.Character then return end
+    
+    local player = espData.player
+    local character = player.Character
+    local humanoid = character:FindFirstChild("Humanoid")
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    
+    if not rootPart or not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        espData.gui.Enabled = false
+        if espData.highlight then
+            espData.highlight.Enabled = false
+        end
+        return
+    end
+    
+    -- Hitung jarak
+    local distance = (LocalPlayer.Character.HumanoidRootPart.Position - rootPart.Position).Magnitude
+    
+    -- Sembunyikan jika terlalu jauh
+    if distance > ESP_CONFIG.maxDistance then
+        espData.gui.Enabled = false
+        if espData.highlight then
+            espData.highlight.Enabled = false
+        end
+        return
+    end
+    
+    espData.gui.Enabled = ESP_CONFIG.enabled
+    espData.gui.Adornee = rootPart
+    
+    -- Tentukan apakah enemy atau ally
+    local isEnemy = true
+    if player.Team and LocalPlayer.Team then
+        isEnemy = player.Team ~= LocalPlayer.Team
+    end
+    
+    -- Update atau buat highlight
+    if ESP_CONFIG.showHighlight then
+        if not espData.highlight or not espData.highlight.Parent then
+            espData.highlight = createHighlight(character, isEnemy)
+        end
+        espData.highlight.Enabled = true
+        
+        -- Update warna highlight berdasarkan tim
+        local highlightColor = isEnemy and ESP_CONFIG.enemyHighlight or ESP_CONFIG.allyHighlight
+        espData.highlight.FillColor = highlightColor
+        espData.highlight.OutlineColor = highlightColor
+    else
+        if espData.highlight then
+            espData.highlight.Enabled = false
+        end
+    end
+    
+    -- Update jarak
+    if ESP_CONFIG.showDistance then
+        espData.distanceLabel.Text = math.floor(distance) .. "m"
+        espData.distanceLabel.Visible = true
+    else
+        espData.distanceLabel.Visible = false
+    end
+    
+    -- Update nama
+    if ESP_CONFIG.showNames then
+        espData.nameLabel.Visible = true
+    else
+        espData.nameLabel.Visible = false
+    end
+    
+    -- Update health
+    if ESP_CONFIG.showHealth and humanoid then
+        local currentHealth = math.floor(humanoid.Health)
+        local maxHealth = math.floor(humanoid.MaxHealth)
+        local healthPercent = math.floor((currentHealth / maxHealth) * 100)
+        
+        -- Update persentase health
+        espData.healthLabel.Text = healthPercent .. "%"
+        espData.healthLabel.Visible = true
+        
+        -- Update angka health aktual - FITUR BARU
+        espData.healthNumberLabel.Text = currentHealth .. "/" .. maxHealth
+        espData.healthNumberLabel.Visible = true
+        
+        -- Ubah warna berdasarkan health
+        local healthColor
+        if healthPercent > 75 then
+            healthColor = Color3.fromRGB(0, 255, 0) -- hijau
+        elseif healthPercent > 50 then
+            healthColor = Color3.fromRGB(255, 255, 0) -- kuning
+        elseif healthPercent > 25 then
+            healthColor = Color3.fromRGB(255, 165, 0) -- orange
+        else
+            healthColor = Color3.fromRGB(255, 0, 0) -- merah
+        end
+        
+        espData.healthLabel.TextColor3 = healthColor
+        espData.healthNumberLabel.TextColor3 = healthColor
+    else
+        espData.healthLabel.Visible = false
+        espData.healthNumberLabel.Visible = false
+    end
+    
+    -- Tentukan warna nama berdasarkan tim
+    local espColor = isEnemy and ESP_CONFIG.enemyColor or ESP_CONFIG.allyColor
+    espData.nameLabel.TextColor3 = espColor
+end
+
+-- Fungsi untuk menghapus ESP
+local function removeESP(player)
+    if espObjects[player] then
+        if espObjects[player].gui then
+            espObjects[player].gui:Destroy()
+        end
+        if espObjects[player].highlight then
+            espObjects[player].highlight:Destroy()
+        end
+        espObjects[player] = nil
+    end
+end
+
+-- Event handlers
+local function onPlayerAdded(player)
+    player.CharacterAdded:Connect(function(character)
+        wait(1) -- tunggu character sepenuhnya load
+        local esp = createESP(player)
+        if esp and character:FindFirstChild("HumanoidRootPart") then
+            esp.Parent = character:FindFirstChild("HumanoidRootPart")
+        end
+    end)
+    
+    -- Handle jika character sudah ada saat player join
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local esp = createESP(player)
+        if esp then
+            esp.Parent = player.Character:FindFirstChild("HumanoidRootPart")
+        end
+    end
+end
+
+local function onPlayerRemoving(player)
+    removeESP(player)
+end
+
+-- Setup event connections
+Players.PlayerAdded:Connect(onPlayerAdded)
+Players.PlayerRemoving:Connect(onPlayerRemoving)
+
+-- Setup ESP untuk player yang sudah ada
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        onPlayerAdded(player)
+    end
+end
+
+-- Update loop
+RunService.Heartbeat:Connect(function()
+    for player, espData in pairs(espObjects) do
+        if Players:FindFirstChild(player.Name) then
+            updateESP(espData)
+        else
+            removeESP(player)
+        end
+    end
+end)
+
+-- Fungsi toggle ESP
+local function toggleESP()
+    ESP_CONFIG.enabled = not ESP_CONFIG.enabled
+    print("ESP " .. (ESP_CONFIG.enabled and "Enabled" or "Disabled"))
+end
+
+-- Fungsi toggle highlight
+local function toggleHighlight()
+    ESP_CONFIG.showHighlight = not ESP_CONFIG.showHighlight
+    print("ESP Highlight " .. (ESP_CONFIG.showHighlight and "Enabled" or "Disabled"))
+end
+
+-- Fungsi untuk mengatur jarak maksimal
+local function setMaxDistance(distance)
+    ESP_CONFIG.maxDistance = distance
+    print("Max ESP Distance set to: " .. distance)
+end
+
+-- Fungsi untuk mengatur transparansi highlight
+local function setHighlightTransparency(transparency)
+    ESP_CONFIG.highlightTransparency = math.clamp(transparency, 0, 1)
+    print("Highlight transparency set to: " .. ESP_CONFIG.highlightTransparency)
+    
+    -- Update semua highlight yang ada
+    for _, espData in pairs(espObjects) do
+        if espData.highlight then
+            espData.highlight.FillTransparency = ESP_CONFIG.highlightTransparency
+        end
+    end
+end
+
+-- Export fungsi untuk kontrol eksternal
+_G.ESP = {
+    toggle = toggleESP,
+    toggleHighlight = toggleHighlight,
+    setMaxDistance = setMaxDistance,
+    setHighlightTransparency = setHighlightTransparency,
+    config = ESP_CONFIG,
+    objects = espObjects
+}
+
+print("ESP Player Script with Highlight loaded successfully!")
+print("Commands:")
+print("_G.ESP.toggle() - Enable/disable ESP")
+print("_G.ESP.toggleHighlight() - Enable/disable highlight")
+print("_G.ESP.setMaxDistance(number) - Set max distance")
+print("_G.ESP.setHighlightTransparency(0-1) - Set highlight transparency (0=solid, 1=invisible)")
+print("Current highlight transparency: " .. ESP_CONFIG.highlightTransparency)
